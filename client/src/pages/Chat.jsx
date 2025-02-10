@@ -109,7 +109,7 @@ const minutes = now.getMinutes();
                 <i>{msg.message}</i>
               ) : (
                 <>
-                  <strong>{msg.username}:</strong> {msg.message} <div style={{color:'black', 'font-size':'12px'}}>{`${msg.hours}:${msg.minutes}`}</div>
+                  <strong>{msg.username}:</strong> {msg.message} <div className="time">{`${msg.hours}:${msg.minutes}`}</div>
                 </>
               )}
             </div>

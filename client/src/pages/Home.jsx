@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import {io} from 'socket.io-client';
 import {useNavigate} from 'react-router-dom'; 
+import { v4 as uuidv4 } from 'uuid';
 
 
 const Home = ()=>{
@@ -24,6 +25,14 @@ const Home = ()=>{
     })
   }
 
+
+  const generateHash = (e)=>{
+    e.preventDefault();
+    const id = uuidv4();
+    console.log(typeof id);
+    setRoomid(id);
+  }
+
   return (
     <> 
 
@@ -43,8 +52,8 @@ const Home = ()=>{
             <label htmlFor="username" className="mx-5 p-1">Room-id</label>
             <input type="text" className="border border-solid p-1" placeholder="room-id" value={roomid} onChange={(e)=>setRoomid(e.target.value)}/>
           </div>
-
-          <button className="bg-amber-300 w-[100%] p-3" onClick={handleClick}>Join</button>
+          <button className="bg-amber-300 w-[100%] p-3 m-1" onClick={generateHash}>Generate-id</button>
+          <button className="bg-amber-300 w-[100%] p-3 m-1" onClick={handleClick}>Join</button>
         </div>
       </div>
     </>
