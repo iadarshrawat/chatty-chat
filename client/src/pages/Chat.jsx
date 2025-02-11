@@ -1,107 +1,163 @@
 import { useEffect, useState } from "react";
-import { io } from "socket.io-client";
 import { useLocation, useParams } from "react-router-dom";
-import member from "../assets/members.png";
-
+import newSocket from "../socket/socket.config";
 import "../style/chat.scss";
 
 const Chat = () => {
-  const [socket, setSocket] = useState(null);
   const [clients, setClients] = useState([]);
   const [message, setMessage] = useState("");
   const [messages, setMessages] = useState([]);
+  const [privateChat, setPrivateChat] = useState(null); // State for private chat popup
+  const [privateMessages, setPrivateMessages] = useState({});
+  const [privateMessage, setPrivateMessage] = useState("");
+  const [typingUsers, setTypingUsers] = useState([]);
+  const [activeUsers, setActiveUsers] = useState([]);
+
   const location = useLocation();
   const { id: roomId } = useParams();
 
-  const now = new Date();
-const hours = now.getHours(); // Gets the current hour (0-23)
-const minutes = now.getMinutes();
-
+  const userId = location.state?.userid || "1234";
+  const username = location.state?.name || "Guest";
 
   useEffect(() => {
-    if (socket) return;
-
-    const newSocket = io("http://localhost:5000", {
-      reconnection: true,
-      reconnectionAttempts: 5,
-      reconnectionDelay: 1000,
-    });
-
-    setSocket(newSocket);
-
-    newSocket.emit("join", {
-      roomId,
-      username: location.state?.name || "Guest",
-    });
+    newSocket.emit("join", { roomId, username, userid: userId });
 
     newSocket.on("joined", ({ clients, username }) => {
       console.log(`${username} joined the chat`);
       setMessages((prevMessages) => [
         ...prevMessages,
-        { system: true, message: `${location.state?.name === username ? "You" : username} joined the chat!` },
+        {
+          system: true,
+          message: `${
+            username === location.state?.name ? "You" : username
+          } joined the chat!`,
+        },
       ]);
+      setClients(clients);
+    });
 
+    newSocket.on('online-users', (users)=>{
+        setActiveUsers(users.map((user)=>user.userId));
+    })
+
+    newSocket.on("all-clients", (clients) => {
       setClients(clients);
     });
 
     newSocket.on("received_message", (msg) => {
-      console.log("Received message:", msg);
-      setMessages((prev) => [...prev, msg]);
+      setMessages((prev) => {
+        if (msg.username === username) return prev;
+        return [...prev, msg];
+      });
     });
 
     newSocket.on("user-disconnected", ({ username }) => {
-      console.log(username, "disconnected");
       setMessages((prevMessages) => [
         ...prevMessages,
         { system: true, message: `${username} left the chat!` },
       ]);
     });
 
-    newSocket.on("connect", () => {
-      console.log("Connected:", newSocket.id);
+    // Handle receiving private messages
+    newSocket.on("newPrivateMessage", ({ senderId, message }) => {
+        setPrivateMessages((prev) => ({
+          ...prev,
+          [senderId]: [...(prev[senderId] || []), { senderId, message }],
+        }));
+      });
+
+    newSocket.on("userTyping", ({ username }) => {
+      setTypingUsers((prev) => {
+        if (!prev.includes(username)) return [...prev, username];
+        return prev;
+      });
+    });
+
+    newSocket.on("userStoppedTyping", ({ username }) => {
+      setTypingUsers((prev) => prev.filter((user) => user !== username));
     });
 
     return () => {
-      if (newSocket) {
-        newSocket.emit("leave", {
-          roomId,
-          username: location.state?.name || "Guest",
-        });
-        newSocket.disconnect();
-      }
+      newSocket.emit("leave", { roomId, username, userid: userId });
+      newSocket.disconnect();
     };
-  }, [roomId]); // Removed `location.state` dependency to avoid unnecessary re-renders
+  }, [roomId]);
 
   const handleSend = () => {
-    if (!socket || !message.trim()) return;
+    if (!newSocket || !message.trim()) return;
 
     const msgData = {
       message,
-      hours,
-      minutes,
+      hours: new Date().getHours(),
+      minutes: new Date().getMinutes(),
       roomId,
-      username: location.state?.name || "Guest",
+      username,
     };
 
-    socket.emit("send-message", msgData);
-    setMessages((prev) => [...prev, msgData]); // Add sent message to chat
-    setMessage(""); // Clear input field after sending
+    newSocket.emit("send-message", msgData);
+    setMessages((prev) => [...prev, { ...msgData, sender: true }]);
+    setMessage("");
+  };
+
+  const handlePrivateMessageSend = () => {
+    if (!privateChat || !privateMessage.trim()) return;
+
+    const recipientId = privateChat.userId;
+
+    const privateMsgData = {
+      recipientId,
+      message: privateMessage,
+      senderId: userId,
+    };
+
+    newSocket.emit("privateMessage", privateMsgData);
+
+    setPrivateMessages((prev) => ({
+      ...prev,
+      [recipientId]: [
+        ...(prev[recipientId] || []),
+        { senderId: userId, message: privateMessage },
+      ],
+    }));
+
+    setPrivateMessage("");
   };
 
   return (
     <div className="chat-container">
+      <div className="list-container">
+        <h1>All Clients</h1>
+        <ul>
+          {clients.map((client, index) => (
+            
+            <li
+              key={index}
+              onClick={() => client.userId !== userId && setPrivateChat(client)}
+            >
+                <span className={`status-indicator ${activeUsers.includes(client.userId) ? "active" : "inactive"}`}></span>
+              {client.username}
+            </li>
+          ))}
+        </ul>
+      </div>
+
       <div className="sub-container">
         <h1 className="room-title">{`Chat Room: ${roomId}`}</h1>
-
+        {typingUsers.length > 0 && (
+          <p className="typing-indicator">
+            {typingUsers.join(", ")} {typingUsers.length > 1 ? "are" : "is"}{" "}
+            typing...
+          </p>
+        )}
         <div className="messages-box">
           {messages.map((msg, index) => (
             <div
               key={index}
               className={`message ${
-                msg.username === location.state?.name
-                  ? "mine"
-                  : msg.system
+                msg.system
                   ? "system"
+                  : msg.username === username
+                  ? "mine"
                   : "other"
               }`}
             >
@@ -109,33 +165,61 @@ const minutes = now.getMinutes();
                 <i>{msg.message}</i>
               ) : (
                 <>
-                  <strong>{msg.username}:</strong> {msg.message} <div className="time">{`${msg.hours}:${msg.minutes}`}</div>
+                  <strong>{msg.username}:</strong> {msg.message}
+                  <div className="time">{`${msg.hours}:${msg.minutes}`}</div>
                 </>
               )}
             </div>
           ))}
         </div>
-
         <div className="chat-input">
-          <div className="btn">
-            <img src={member} alt="" width="50px" />
-            <div className="pop-up">
-              <ul>
-                {clients.map((client, index) => (
-                  <li key={index}>{client.username}</li>
-                ))}
-              </ul>
-            </div>
-          </div>
           <input
             type="text"
             placeholder="Type a message..."
             value={message}
-            onChange={(e) => setMessage(e.target.value)}
+            onChange={(e) => {
+              setMessage(e.target.value);
+              newSocket.emit("typing", { roomId, username });
+
+              setTimeout(() => {
+                newSocket.emit("stopTyping", { roomId, username });
+              }, 2000);
+            }}
           />
           <button onClick={handleSend}>Send</button>
         </div>
       </div>
+
+      {privateChat && (
+        <div className="private-chat-popup">
+          <div className="popup-header">
+            <h3>Chat with {privateChat.username}</h3>
+            <button onClick={() => setPrivateChat(null)}>X</button>
+          </div>
+          <div className="private-messages-box">
+            {(privateMessages[privateChat.userId] || []).map((msg, index) => (
+              <div
+                key={index}
+                className={`private-message ${
+                  msg.senderId === userId ? "mine" : "other"
+                }`}
+              >
+                {msg.message}
+              </div>
+            ))}
+          </div>
+
+          <div className="chat-input">
+            <input
+              type="text"
+              placeholder="Type a private message..."
+              value={privateMessage}
+              onChange={(e) => setPrivateMessage(e.target.value)}
+            />
+            <button onClick={handlePrivateMessageSend}>Send</button>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

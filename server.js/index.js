@@ -6,7 +6,9 @@ const cors = require("cors");
 const app = express();
 const server = http.createServer(app);
 
-const userSocketMap = {};
+const userSocketMap = {}; // { userId: { socketId, username, roomId } }
+
+let activeUser = [];
 
 const io = new Server(server, {
   cors: {
@@ -16,61 +18,91 @@ const io = new Server(server, {
   },
 });
 
-app.use(
-  cors({
-    origin: "http://localhost:5173",
-    methods: ["GET", "POST"],
-    credentials: true,
-  })
-);
+app.use(cors({
+  origin: "http://localhost:5173",
+  methods: ["GET", "POST"],
+  credentials: true,
+}));
 
-const getAllConnectedClients = (roomId) => {
-  return Array.from(io.sockets.adapter.rooms.get(roomId) || []).map(
-    (socketId) => ({
-      socketId,
-      username: userSocketMap[socketId]?.username || "Unknown",
-    })
-  );
+const getAllConnectedClients = () => {
+  return Object.keys(userSocketMap).map((userId) => ({
+    userId,
+    username: userSocketMap[userId].username,
+    roomId: userSocketMap[userId].roomId,
+    socketId: userSocketMap[userId].socketId,
+  }));
 };
 
-io.on("connection", (socket) => {
+io.on("connection", (socket) => {   
   console.log("Socket connected:", socket.id);
 
-  socket.on("join", ({ roomId, username }) => {
-    userSocketMap[socket.id] = { username, roomId };
+  socket.on("join", ({ roomId, username, userid }) => {
+    console.log("User joined:", { roomId, username, userid });
+
+    if(!activeUser.some((user)=>user.userId === userid)){
+        activeUser.push({userId: userid, username, socketId: socket.id});
+    }
+
+    io.emit('online-users', activeUser);
+
+    userSocketMap[userid] = { socketId: socket.id, username, roomId };
     socket.join(roomId);
 
-    const clients = getAllConnectedClients(roomId);
-    clients.forEach(({ socketId }) => {
-      io.to(socketId).emit("joined", {
-        clients,
-        username,
-        socketId: socket.id,
-      });
+    io.emit("all-clients", getAllConnectedClients());
+
+    io.to(roomId).emit("joined", {
+      clients: getAllConnectedClients().filter(client => client.roomId === roomId),
+      username,
+      userid,
     });
   });
 
   socket.on("send-message", (message) => {
     console.log("Message:", message);
-    socket.to(message.roomId).emit("received_message", message);
+    io.to(message.roomId).emit("received_message", message);
   });
 
-  socket.on("leave", ({ roomId, username }) => {
-    if (!userSocketMap[socket.id]) return;
-    
+ socket.on("privateMessage", ({ recipientId, message, senderId }) => {
+  const recipientSocketId = userSocketMap[recipientId]?.socketId;
+  
+  if (recipientSocketId) {
+    io.to(recipientSocketId).emit("newPrivateMessage", { senderId, message });
+  } else {
+    console.warn(`User ${recipientId} is not connected.`);
+  }
+});
+
+
+socket.on("typing", ({ roomId, username }) => {
+    socket.to(roomId).emit("userTyping", { username });
+  });
+  
+  socket.on("stopTyping", ({ roomId, username }) => {
+    socket.to(roomId).emit("userStoppedTyping", { username });
+  });
+
+  socket.on("leave", ({ roomId, username, userid }) => {
+    if (!userSocketMap[userid]) return;
+
     socket.leave(roomId);
     socket.to(roomId).emit("user-disconnected", { username });
-    delete userSocketMap[socket.id];
+    delete userSocketMap[userid];
+
+    io.emit("all-clients", getAllConnectedClients());
 
     console.log(`User ${username} left Room ${roomId}`);
   });
 
   socket.on("disconnect", () => {
-    const userData = userSocketMap[socket.id];
-    if (userData) {
-      const { username, roomId } = userData;
+    const userId = Object.keys(userSocketMap).find((id) => userSocketMap[id].socketId === socket.id);
+    
+    if (userId) {
+      const { username, roomId } = userSocketMap[userId];
+
       socket.to(roomId).emit("user-disconnected", { username });
-      delete userSocketMap[socket.id];
+      delete userSocketMap[userId];
+
+      io.emit("all-clients", getAllConnectedClients());
 
       console.log(`User ${username} disconnected from Room ${roomId}`);
     }
